@@ -1,0 +1,37 @@
+diff --git a/iokit/Kernel/IOUserServer.cpp b/iokit/Kernel/IOUserServer.cpp
+index b14ca9c..76d4b02 100644
+--- a/iokit/Kernel/IOUserServer.cpp
++++ b/iokit/Kernel/IOUserServer.cpp
+@@ -655,8 +655,32 @@ IOService::SendIOMessageServicePropertyChange_Impl(void)
+ {
+ 	return messageClients(kIOMessageServicePropertyChange);
+ }
++
++/*
++ * Apple's iig emits the DriverKit-facing forwarders and the TYPE(...) OSAction
++ * factories into the generated .iig.cpp, which the kernel build does not
++ * compile. The Linux iig shim generates the declarations but not these
++ * definitions, so spell out the ones the kernel actually calls.
++ */
++kern_return_t
++IOService::UserSetProperties(OSContainer * properties)
++{
++	return UserSetProperties_Impl(properties);
++}
++
++kern_return_t
++IOService::SendIOMessageServicePropertyChange(void)
++{
++	return SendIOMessageServicePropertyChange_Impl();
++}
+ #endif /* PRIVATE_WIFI_ONLY */
+ 
++kern_return_t
++IOUserClient::CreateActionKernelCompletion(size_t referenceSize, OSAction ** action)
++{
++	return OSAction::Create(this, 0, 0, referenceSize, action);
++}
++
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+ 
+ kern_return_t

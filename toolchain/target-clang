@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Target compiler for arm64 iOS. A command carrying -mmacosx-version-min is a
+# host-tool build (XNU's SETUP makefiles); hand it to the host compiler.
+for a in "$@"; do
+    case "$a" in
+        -mmacosx-version-min=*)
+            exec "$(dirname "$0")/host-clang" "$@";;
+    esac
+done
+args=(); target=(); arch=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -arch) arch="$2"; shift 2;;
+        -target) target=(-target "$2"); shift 2;;
+        -target=*) target=("$1"); shift;;
+        *) args+=("$1"); shift;;
+    esac
+done
+if [ ${#target[@]} -eq 0 ]; then
+    case "$arch" in
+        arm64e) target=(-target arm64e-apple-ios17.0);;
+        *)      target=(-target arm64-apple-ios17.0);;
+    esac
+fi
+link=1
+for a in "${args[@]}"; do
+    case "$a" in -c|-E|-S|-M|-fsyntax-only) link=0;; esac
+done
+if [ $link = 1 ]; then
+    args=(--ld-path="$(dirname "$0")/ld" "${args[@]}")
+fi
+exec "${XNU_LINUX_CLANG:-clang}" "${target[@]}" "${args[@]}"

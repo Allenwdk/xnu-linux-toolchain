@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""plutil for a Linux XNU build.
+
+Handles -convert json|binary1|xml1, -extract and -lint. Input plists can be
+XML, binary, or the OpenStep/NeXTSTEP format that Xcode's project.pbxproj
+files use -- plistlib has no reader for that one, so there is a small parser
+here.
+"""
+import json
+import plistlib
+import sys
+from pathlib import Path
+
+
+class OpenStepParser:
+    def __init__(self, text):
+        self.t = text
+        self.i = 0
+
+    def error(self, msg):
+        line = self.t.count('\n', 0, self.i) + 1
+        raise ValueError(f'plutil: {msg} at line {line}')
+
+    def skip(self):
+        while self.i < len(self.t):
+            c = self.t[self.i]
+            if c in ' \t\r\n':
+                self.i += 1
+            elif self.t.startswith('//', self.i):
+                self.i = self.t.find('\n', self.i)
+                if self.i < 0:
+                    self.i = len(self.t)
+            elif self.t.startswith('/*', self.i):
+                end = self.t.find('*/', self.i + 2)
+                self.i = len(self.t) if end < 0 else end + 2
+            else:
+                return
+
+    def parse(self):
+        self.skip()
+        v = self.value()
+        self.skip()
+        return v
+
+    def value(self):
+        self.skip()
+        if self.i >= len(self.t):
+            self.error('unexpected end of input')
+        c = self.t[self.i]
+        if c == '{':
+            return self.dictionary()
+        if c == '(':
+            return self.array()
+        if c == '"':
+            return self.quoted()
+        if self.t.startswith('<', self.i):
+            return self.data()
+        return self.bare()
+
+    def dictionary(self):
+        self.i += 1
+        out = {}
+        while True:
+            self.skip()
+            if self.i >= len(self.t):
+                self.error('unterminated dictionary')
+            if self.t[self.i] == '}':
+                self.i += 1
+                return out
+            key = self.value()
+            self.skip()
+            if self.i >= len(self.t) or self.t[self.i] != '=':
+                self.error('expected = in dictionary')
+            self.i += 1
+            out[key] = self.value()
+            self.skip()
+            if self.i < len(self.t) and self.t[self.i] == ';':
+                self.i += 1
+
+    def array(self):
+        self.i += 1
+        out = []
+        while True:
+            self.skip()
+            if self.i >= len(self.t):
+                self.error('unterminated array')
+            if self.t[self.i] == ')':
+                self.i += 1
+                return out
+            out.append(self.value())
+            self.skip()
+            if self.i < len(self.t) and self.t[self.i] == ',':
+                self.i += 1
+
+    def quoted(self):
+        self.i += 1
+        buf = []
+        while self.i < len(self.t):
+            c = self.t[self.i]
+            if c == '\\':
+                self.i += 1
+                if self.i >= len(self.t):
+                    self.error('unterminated escape')
+                e = self.t[self.i]
+                buf.append({'n': '\n', 't': '\t', 'r': '\r', '"': '"',
+                            '\\': '\\', "'": "'"}.get(e, e))
+                self.i += 1
+            elif c == '"':
+                self.i += 1
+                return ''.join(buf)
+            else:
+                buf.append(c)
+                self.i += 1
+        self.error('unterminated string')
+
+    def bare(self):
+        start = self.i
+        while self.i < len(self.t) and self.t[self.i] not in ' \t\r\n=;,(){}<>':
+            self.i += 1
+        if start == self.i:
+            self.error('expected a value')
+        return self.t[start:self.i]
+
+    def data(self):
+        end = self.t.find('>', self.i)
+        if end < 0:
+            self.error('unterminated data')
+        hexdigits = ''.join(self.t[self.i + 1:end].split())
+        self.i = end + 1
+        return bytes.fromhex(hexdigits)
+
+
+def load(path):
+    raw = Path(path).read_bytes()
+    if raw.startswith(b'bplist00'):
+        return plistlib.loads(raw)
+    text = raw.decode('utf-8', 'replace')
+    if text.lstrip().startswith(('<?xml', '<plist')):
+        return plistlib.loads(raw)
+    return OpenStepParser(text).parse()
+
+
+def jsonify(obj):
+    if isinstance(obj, bytes):
+        return obj.hex()
+    if isinstance(obj, dict):
+        return {k: jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [jsonify(v) for v in obj]
+    return obj
+
+
+def main(argv):
+    args = argv[1:]
+    if args and args[0] in ('-p', '-p0'):
+        print(json.dumps(jsonify(load(args[1])), indent=2))
+        return 0
+    convert = out = extract = src = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '-o':
+            out = args[i + 1]; i += 2
+        elif a == '-convert':
+            convert = args[i + 1]; i += 2
+        elif a == '-extract':
+            extract = args[i + 1]; i += 2
+        elif a in ('-lint', '-s', '-n'):
+            i += 1
+        elif a.startswith('-'):
+            i += 1
+        else:
+            src = a; i += 1
+    if src is None:
+        sys.exit('plutil: no input file')
+    data = load(src)
+    if extract:
+        for part in extract.split('.'):
+            data = data[part]
+        print(data.decode() if isinstance(data, bytes) else data)
+        return 0
+    if convert in (None, 'json'):
+        payload = json.dumps(jsonify(data), indent=2).encode()
+    elif convert == 'binary1':
+        payload = plistlib.dumps(data, fmt=plistlib.FMT_BINARY)
+    else:
+        payload = plistlib.dumps(data, fmt=plistlib.FMT_XML)
+    if out:
+        Path(out).write_bytes(payload)
+    else:
+        sys.stdout.buffer.write(payload)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

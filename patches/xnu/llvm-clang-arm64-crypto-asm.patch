@@ -1,0 +1,18 @@
+diff --git a/osfmk/arm64/corecrypto/arm64_isa_compatibility.h b/osfmk/arm64/corecrypto/arm64_isa_compatibility.h
+index 8800687..e97e11f 100644
+--- a/osfmk/arm64/corecrypto/arm64_isa_compatibility.h
++++ b/osfmk/arm64/corecrypto/arm64_isa_compatibility.h
+@@ -37,7 +37,12 @@
+ // #include <Availability.h>
+ #include <sys/cdefs.h>
+ 
+-#if defined(__clang__) && ((defined(__apple_build_version__) && __apple_build_version__ > 5010000))
++/* The vN.4s crypto syntax needs a clang new enough to parse it; that is
++ * every clang since Apple's 5010000, including upstream LLVM clang, which
++ * does not define __apple_build_version__ at all. The qN form in the other
++ * branch is Apple's assembler syntax and upstream LLVM rejects it. */
++#if defined(__clang__) && (!defined(__apple_build_version__) || \
++    (__apple_build_version__ > 5010000))
+ #define __USES_V_CRYPTO_INTRINSICS 1
+ #else
+ #define __USES_V_CRYPTO_INTRINSICS 0

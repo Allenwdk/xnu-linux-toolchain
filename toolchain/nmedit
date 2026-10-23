@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Wrapper for cctools-port's Apple nmedit. `bootstrap.sh` installs the cctools
+# tree under $PREFIX/cctools; this script lives in $PREFIX/bin.
+PREFIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "$PREFIX/cctools/bin/nmedit" "$@"

@@ -1,0 +1,342 @@
+diff --git a/Makefile b/Makefile
+index 051cb25..a94baec 100644
+--- a/Makefile
++++ b/Makefile
+@@ -143,8 +143,8 @@ installsrc:
+ 
+ else ifneq ($(findstring xnu_tests,$(RC_ProjectName)),)
+ 
+-export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
+-export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++export SYSCTL_HW_PHYSICALCPU := $(shell sysctl -n hw.physicalcpu)
++export SYSCTL_HW_LOGICALCPU  := $(shell sysctl -n hw.logicalcpu)
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ default: install
+@@ -160,8 +160,8 @@ installsrc:
+ 
+ else ifeq ($(RC_ProjectName),xnu_tests_driverkit)
+ 
+-export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
+-export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++export SYSCTL_HW_PHYSICALCPU := $(shell sysctl -n hw.physicalcpu)
++export SYSCTL_HW_LOGICALCPU  := $(shell sysctl -n hw.logicalcpu)
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ default: install
+@@ -193,8 +193,8 @@ endif
+ # CPUs. If the system does not support SMT, use N+1.
+ # If MAKEJOBS or -jN is passed on the make line, that takes precedence.
+ #
+-export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
+-export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
++export SYSCTL_HW_PHYSICALCPU := $(shell sysctl -n hw.physicalcpu)
++export SYSCTL_HW_LOGICALCPU  := $(shell sysctl -n hw.logicalcpu)
+ MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
+ 
+ TOP_TARGETS = \
+diff --git a/SETUP/config/Makefile b/SETUP/config/Makefile
+index 52dd350..18a666a 100644
+--- a/SETUP/config/Makefile
++++ b/SETUP/config/Makefile
+@@ -9,7 +9,7 @@ include $(MakeInc_def)
+ OBJS = externs.o main.o mkheaders.o mkioconf.o mkmakefile.o	\
+ 	openp.o searchp.o lexer.yy.o parser.o
+ 
+-CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
++CFLAGS = $(HOST_COMPAT_CFLAGS) -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
+ CFLAGS += -DYY_NO_INPUT
+ 
+ WARNFLAGS = -Wall
+@@ -18,7 +18,7 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ config: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(HOST_COMPAT_LIBS)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
+ 
+diff --git a/SETUP/decomment/Makefile b/SETUP/decomment/Makefile
+index 6d3ffff..4d8f22f 100644
+--- a/SETUP/decomment/Makefile
++++ b/SETUP/decomment/Makefile
+@@ -8,7 +8,7 @@ include $(MakeInc_def)
+ 
+ OBJS = decomment.o
+ 
+-CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
++CFLAGS = $(HOST_COMPAT_CFLAGS) -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
+ 
+ WARNFLAGS = -Wall
+ 
+@@ -16,7 +16,7 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ decomment: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(HOST_COMPAT_LIBS)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
+ 
+diff --git a/SETUP/installfile/Makefile b/SETUP/installfile/Makefile
+index 0e946f8..f3bfe20 100644
+--- a/SETUP/installfile/Makefile
++++ b/SETUP/installfile/Makefile
+@@ -8,7 +8,7 @@ include $(MakeInc_def)
+ 
+ OBJS = installfile.o
+ 
+-CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
++CFLAGS = $(HOST_COMPAT_CFLAGS) -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
+ 
+ WARNFLAGS = -Wall
+ 
+@@ -16,7 +16,7 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ installfile: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(HOST_COMPAT_LIBS)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
+ 
+diff --git a/SETUP/kextsymboltool/Makefile b/SETUP/kextsymboltool/Makefile
+index 45d7689..5420084 100644
+--- a/SETUP/kextsymboltool/Makefile
++++ b/SETUP/kextsymboltool/Makefile
+@@ -8,7 +8,7 @@ include $(MakeInc_def)
+ 
+ OBJS = kextsymboltool.o
+ 
+-CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
++CFLAGS = $(HOST_COMPAT_CFLAGS) -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
+ 
+ WARNFLAGS = -Wall
+ 
+@@ -16,7 +16,7 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -lst
+ 
+ kextsymboltool: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(HOST_COMPAT_LIBS)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
+ 
+diff --git a/SETUP/replacecontents/Makefile b/SETUP/replacecontents/Makefile
+index 016cfec..8b98b5f 100644
+--- a/SETUP/replacecontents/Makefile
++++ b/SETUP/replacecontents/Makefile
+@@ -8,7 +8,7 @@ include $(MakeInc_def)
+ 
+ OBJS = replacecontents.o
+ 
+-CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
++CFLAGS = $(HOST_COMPAT_CFLAGS) -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
+ 
+ WARNFLAGS = -Wall
+ 
+@@ -16,7 +16,7 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ replacecontents: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(HOST_COMPAT_LIBS)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
+ 
+diff --git a/SETUP/setsegname/Makefile b/SETUP/setsegname/Makefile
+index 39607f1..4427e49 100644
+--- a/SETUP/setsegname/Makefile
++++ b/SETUP/setsegname/Makefile
+@@ -8,7 +8,7 @@ include $(MakeInc_def)
+ 
+ OBJS = setsegname.o
+ 
+-CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
++CFLAGS = $(HOST_COMPAT_CFLAGS) -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
+ 
+ WARNFLAGS = -Wall
+ 
+@@ -16,7 +16,7 @@ LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+ 
+ setsegname: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(HOST_COMPAT_LIBS)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
+ 
+diff --git a/bsd/conf/Makefile b/bsd/conf/Makefile
+index 050f34a..2cd5b93 100644
+--- a/bsd/conf/Makefile
++++ b/bsd/conf/Makefile
+@@ -23,7 +23,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \
+diff --git a/iokit/conf/Makefile b/iokit/conf/Makefile
+index 83259eb..42ac528 100644
+--- a/iokit/conf/Makefile
++++ b/iokit/conf/Makefile
+@@ -22,7 +22,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \
+diff --git a/libkern/conf/Makefile b/libkern/conf/Makefile
+index 050f34a..2cd5b93 100644
+--- a/libkern/conf/Makefile
++++ b/libkern/conf/Makefile
+@@ -23,7 +23,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \
+diff --git a/libsa/conf/Makefile b/libsa/conf/Makefile
+index 050f34a..2cd5b93 100644
+--- a/libsa/conf/Makefile
++++ b/libsa/conf/Makefile
+@@ -23,7 +23,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \
+diff --git a/makedefs/MakeInc.cmd b/makedefs/MakeInc.cmd
+index ee2679f..682b718 100644
+--- a/makedefs/MakeInc.cmd
++++ b/makedefs/MakeInc.cmd
+@@ -102,12 +102,12 @@ ifeq ($(VERBOSE),YES)
+ 	_v =
+ 	_vstdout =
+ 	_vstderr =
+-	XCRUN = /usr/bin/xcrun -verbose
++	XCRUN ?= xcrun -verbose
+ else
+ 	_v = @
+ 	_vstdout = > /dev/null
+ 	_vstderr = 2> /dev/null
+-	XCRUN = /usr/bin/xcrun
++	XCRUN ?= xcrun
+ endif
+ 
+ VERBOSE_GENERATED_MAKE_FRAGMENTS = NO
+@@ -324,7 +324,7 @@ MKDIR = /bin/mkdir -p
+ CHMOD = /bin/chmod
+ FIND = /usr/bin/find
+ XARGS = /usr/bin/xargs
+-PAX = /bin/pax
++PAX ?= pax
+ BASENAME = /usr/bin/basename
+ DIRNAME = /usr/bin/dirname
+ TR = /usr/bin/tr
+@@ -332,7 +332,7 @@ TOUCH = /usr/bin/touch
+ SLEEP = /bin/sleep
+ AWK = /usr/bin/awk
+ SED = /usr/bin/sed
+-PLUTIL = /usr/bin/plutil
++PLUTIL ?= plutil
+ PATCH = /usr/bin/patch
+ GREP = /usr/bin/grep
+ 
+@@ -343,6 +343,9 @@ GREP = /usr/bin/grep
+ ifeq ($(origin HOST_OS_VERSION),undefined)
+ 	export HOST_OS_VERSION	:= $(shell sw_vers -productVersion)
+ endif
++HOST_COMPAT_CFLAGS ?= -include $(HOST_SDKROOT)/usr/include/compat/hostcompat.h -I$(HOST_SDKROOT)/usr/include/compat $(if $(UNIXNU_HOST_CCTOOLS_INCLUDE),-I$(UNIXNU_HOST_CCTOOLS_INCLUDE)) -I$(SRCROOT)/EXTERNAL_HEADERS
++HOST_COMPAT_LIBS ?= -L$(HOST_SDKROOT)/usr/lib -lhostcompat -luuid
++HOST_CSH ?= csh
+ ifeq ($(origin HOST_CC),undefined)
+ 	export HOST_CC		:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find clang)
+ endif
+@@ -356,7 +359,7 @@ ifeq ($(origin HOST_GM4),undefined)
+ 	export HOST_GM4		:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find gm4)
+ endif
+ ifeq ($(origin HOST_CODESIGN),undefined)
+-	export HOST_CODESIGN	:= /usr/bin/codesign
++	export HOST_CODESIGN	:= codesign
+ endif
+ ifeq ($(origin HOST_CODESIGN_ALLOCATE),undefined)
+ 	export HOST_CODESIGN_ALLOCATE	:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find codesign_allocate)
+diff --git a/makedefs/MakeInc.top b/makedefs/MakeInc.top
+index 5c76260..f13c881 100644
+--- a/makedefs/MakeInc.top
++++ b/makedefs/MakeInc.top
+@@ -285,7 +285,7 @@ endif
+ # $(warning PRIMARY_KERNEL_CONFIGS is $(PRIMARY_KERNEL_CONFIGS))
+ # $(warning VARIANT_CONFIGS is $(VARIANT_CONFIGS))
+ 
+-MEMORY_SIZE := $(shell /usr/sbin/sysctl -n hw.memsize)
++MEMORY_SIZE := $(shell sysctl -n hw.memsize)
+ 
+ # Assume LTO scaling by default, unless it is being explicitly passed on the command-line
+ LARGE_BUILD_FOOTPRINT := $(if $(BUILD_LTO),$(BUILD_LTO),1)
+diff --git a/osfmk/conf/Makefile b/osfmk/conf/Makefile
+index 050f34a..2cd5b93 100644
+--- a/osfmk/conf/Makefile
++++ b/osfmk/conf/Makefile
+@@ -23,7 +23,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \
+diff --git a/pexpert/conf/Makefile b/pexpert/conf/Makefile
+index 050f34a..2cd5b93 100644
+--- a/pexpert/conf/Makefile
++++ b/pexpert/conf/Makefile
+@@ -23,7 +23,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \
+diff --git a/san/conf/Makefile b/san/conf/Makefile
+index 050f34a..2cd5b93 100644
+--- a/san/conf/Makefile
++++ b/san/conf/Makefile
+@@ -23,7 +23,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEED) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \
+diff --git a/security/conf/Makefile b/security/conf/Makefile
+index 2efc18a..ab99b4a 100644
+--- a/security/conf/Makefile
++++ b/security/conf/Makefile
+@@ -23,7 +23,7 @@ endif
+ 
+ $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
+ 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
+-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEEF) $(CURRENT_KERNEL_CONFIG)
++	$(_v)$(HOST_CSH) $(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -platform $(PLATFORM) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(DOCONF_SEEF) $(CURRENT_KERNEL_CONFIG)
+ 
+ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
+ 	$(_v)${MAKE} \

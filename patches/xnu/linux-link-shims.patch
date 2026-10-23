@@ -1,0 +1,58 @@
+diff --git a/osfmk/conf/files b/osfmk/conf/files
+index d0baba3..fb0eeeb 100644
+--- a/osfmk/conf/files
++++ b/osfmk/conf/files
+@@ -311,6 +311,7 @@ osfmk/vm/vm_shared_region.c		standard
+ osfmk/vm/vm_shared_region_pager.c	standard
+ osfmk/vm/vm_dyld_pager.c		standard
+ osfmk/vm/vm_swapfile_pager.c		standard
++osfmk/vm/vm_link_compat.c		standard
+ osfmk/vm/vm_tests.c			optional config_xnupost
+ osfmk/vm/vm_user.c			standard
+ osfmk/vm/vm32_user.c			standard
+diff --git a/osfmk/vm/vm_link_compat.c b/osfmk/vm/vm_link_compat.c
+new file mode 100644
+index 0000000..17e710f
+--- /dev/null
++++ b/osfmk/vm/vm_link_compat.c
+@@ -0,0 +1,40 @@
++/*
++ * Link shims for a non-Apple toolchain.
++ *
++ * bsd/pgo/profile_runtime.c prototypes the InstrProfiling.h helpers that
++ * compiler-rt supplies on Apple's link; there is no such runtime here, so
++ * report an empty profile. __cxa_atexit is only referenced by C++ static
++ * destructors the kernel never runs.
++ */
++#include <stdint.h>
++
++uint64_t
++__llvm_profile_get_size_for_buffer_internal(
++	const char *DataBegin, const char *DataEnd,
++	const char *CountersBegin, const char *CountersEnd,
++	const char *NamesBegin, const char *NamesEnd)
++{
++	(void)DataBegin; (void)DataEnd;
++	(void)CountersBegin; (void)CountersEnd;
++	(void)NamesBegin; (void)NamesEnd;
++	return 0;
++}
++
++int
++__llvm_profile_write_buffer_internal(
++	char *Buffer, const char *DataBegin, const char *DataEnd,
++	const char *CountersBegin, const char *CountersEnd,
++	const char *NamesBegin, const char *NamesEnd)
++{
++	(void)Buffer; (void)DataBegin; (void)DataEnd;
++	(void)CountersBegin; (void)CountersEnd;
++	(void)NamesBegin; (void)NamesEnd;
++	return 0;
++}
++
++int
++__cxa_atexit(void (*func)(void *), void *arg, void *dso)
++{
++	(void)func; (void)arg; (void)dso;
++	return 0;
++}

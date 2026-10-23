@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Darwin sysctl values the XNU makefiles ask for.
+key=""
+for a in "$@"; do case "$a" in -*) ;; *) key="$a";; esac; done
+case "$key" in
+  hw.memsize) echo 17179869184;;
+  hw.ncpu|hw.physicalcpu|hw.logicalcpu) nproc;;
+  hw.pagesize) echo 4096;;
+  kern.osrelease) echo "23.6.0";;
+  kern.osversion) echo "23G93";;
+  kern.ostype) echo "Darwin";;
+  *) echo 0;;
+esac

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Host tools run on Linux: drop the Darwin-only flags XNU's SETUP makefiles pass.
+cxx=clang
+case "$(basename "$0")" in *++*) cxx=clang++;; esac
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -isysroot) shift 2;;
+        -mmacosx-version-min=*|-mios-version-min=*|-miphoneos-version-min=*) shift;;
+        -arch) shift 2;;
+        -target) shift 2;;
+        -target=*) shift;;
+        -framework) shift 2;;
+        -F*) shift;;
+        *) args+=("$1"); shift;;
+    esac
+done
+exec "${XNU_LINUX_CLANG:-$cxx}" "${args[@]}"

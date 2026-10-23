@@ -1,0 +1,28 @@
+diff --git a/osfmk/kern/kalloc.h b/osfmk/kern/kalloc.h
+index c027990..796afa9 100644
+--- a/osfmk/kern/kalloc.h
++++ b/osfmk/kern/kalloc.h
+@@ -745,6 +745,23 @@ __options_decl(kt_granule_t, uint32_t, {
+ 	    KT_SUMMARY_GRANULE_TO_IDX(KT_GRANULE_DUAL) |     \
+ 	    KT_SUMMARY_GRANULE_TO_IDX(KT_GRANULE_PAC))
+ 
++/*
++ * The XNU signature type system is an Apple clang extension. A compiler that
++ * lacks those builtins still has to build the kernel. Fall back to a summary
++ * of data granules only: the in-tree _Static_asserts that demand a data-only
++ * type then hold, signatures come out empty, and pointer compatibility checks
++ * always pass. The cost is losing the type-metadata fast paths at runtime.
++ */
++#if !__has_builtin(__builtin_xnu_type_summary)
++#define __builtin_xnu_type_summary(type) KT_SUMMARY_MASK_DATA
++#endif
++#if !__has_builtin(__builtin_xnu_type_signature)
++#define __builtin_xnu_type_signature(type) ""
++#endif
++#if !__has_builtin(__builtin_xnu_types_compatible)
++#define __builtin_xnu_types_compatible(t1, t2) (1)
++#endif
++
+ /*!
+  * @macro KT_SUMMARY_GRANULES
+  *

@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Minimal xcrun for a Linux XNU build. Every SDK name resolves to the
+# fakeroot the UniXNU kernel script already assembles.
+set -u
+# UNIXNU_SDKROOT is build-specific; the project layer sets it to the fakeroot
+# that build-xnu-4k-baseline.sh assembles.
+: "${UNIXNU_SDKROOT:=}"
+: "${UNIXNU_SHIM:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+sdk="${UNIXNU_SDKROOT:-$PWD/.cache/fakeroot}"
+tool=""
+find=0
+case "${1:-}" in
+  -version|--version) exec /usr/sbin/clang --version;;
+esac
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -verbose) shift;;
+    -sdk|--sdk) sdk="$2"; shift 2;;
+    -find|--find) find=1; tool="$2"; shift 2;;
+    -show-sdk-path|--show-sdk-path) echo "$UNIXNU_SDKROOT"; exit 0;;
+    -show-sdk-version|--show-sdk-version) echo "${UNIXNU_SDK_VERSION:-17.0}"; exit 0;;
+    -show-sdk-build-version|--show-sdk-build-version) echo "${UNIXNU_SDK_BUILD:-21A326}"; exit 0;;
+    -show-sdk-platform-path|--show-sdk-platform-path) echo "$UNIXNU_SDKROOT/Platforms/iPhoneOS.platform"; exit 0;;
+    -show-sdk-platform-version|--show-sdk-platform-version) echo "17.0"; exit 0;;
+    -*) shift;;
+    *) tool="$1"; shift; break;;
+  esac
+done
+host=0
+case "$sdk" in *[Mm]ac[Oo][Ss][Xx]*|macosx*|*MacOSX*) host=1;; esac
+resolve() {
+  case "$1" in
+    clang) if [ $host = 1 ]; then echo "$UNIXNU_SHIM/host-clang"; else echo "$UNIXNU_SHIM/target-clang"; fi;;
+    clang++) if [ $host = 1 ]; then echo "$UNIXNU_SHIM/host-clang++"; else echo "$UNIXNU_SHIM/target-clang++"; fi;;
+    cc) if [ $host = 1 ]; then echo "$UNIXNU_SHIM/host-clang"; else echo "$UNIXNU_SHIM/target-clang"; fi;;
+    mig) echo "$UNIXNU_SHIM/mig";;
+    migcom) echo "$UNIXNU_SHIM/migcom";;
+    iig) echo "$UNIXNU_SHIM/iig";;
+    strip|lipo|otool|nm|libtool|nmedit|codesign_allocate|ar|ranlib) echo "$UNIXNU_SHIM/$1";;
+    unifdef) echo "$UNIXNU_SHIM/unifdef";;
+    dsymutil) echo /usr/sbin/dsymutil;;
+    git) echo /usr/bin/git;;
+    python3) echo /usr/bin/python3;;
+    flex) echo /usr/sbin/flex;;
+    bison) echo /usr/sbin/bison;;
+    gm4) echo /usr/sbin/m4;;
+    codesign_allocate) echo "$UNIXNU_SHIM/codesign_allocate";;
+    codesign) echo "$UNIXNU_SHIM/codesign";;
+    scan-build|ctf_insert|ctfconvert|ctfmerge|ctfdump|docc) return 1;;
+    *) command -v "$1" 2>/dev/null || return 1;;
+  esac
+}
+if [ $find = 1 ]; then
+  resolve "$tool"
+  exit $?
+fi
+path=$(resolve "$tool") || { echo "xcrun: unable to find utility \"$tool\"" >&2; exit 1; }
+exec "$path" "$@"

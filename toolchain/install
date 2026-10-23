@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# GNU install with the BSD install flags XNU passes (-S is not "safe" here).
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -S) shift;;
+        -o|-g) shift 2;;
+        -o*|-g*) shift;;
+        *) args+=("$1"); shift;;
+    esac
+done
+exec /usr/bin/install "${args[@]}"

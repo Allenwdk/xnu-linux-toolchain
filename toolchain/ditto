@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -e
+args=()
+for a in "$@"; do case "$a" in -*) ;; *) args+=("$a");; esac; done
+[ ${#args[@]} -ge 2 ] || { echo "ditto: src dst required" >&2; exit 1; }
+mkdir -p "$(dirname "${args[1]}")"
+exec /bin/cp -a "${args[0]}" "${args[1]}"

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# macOS /usr/bin/compression_tool front end, backed by the reference LZFSE
+# implementation. Only the decode form the XNU build uses is supported:
+#   compression_tool -decode -a lzfse -i <in> -o <out>
+set -euo pipefail
+decode=0; algo=""; input=""; output=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -decode) decode=1; shift;;
+    -encode) shift;;
+    -a) algo="$2"; shift 2;;
+    -i) input="$2"; shift 2;;
+    -o) output="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+[ "$decode" = 1 ] || { echo "compression_tool: only -decode is supported" >&2; exit 1; }
+[ "$algo" = "lzfse" ] || [ -z "$algo" ] || { echo "compression_tool: only lzfse is supported" >&2; exit 1; }
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lzfse -decode -i "$input" -o "$output"

@@ -1,0 +1,629 @@
+#!/usr/bin/env python3
+"""Linux stand-in for Apple's DriverKit `iig`.
+
+XNU's iokit/DriverKit/*.iig files are almost valid C++ headers. Apple's iig
+turns each class in one into:
+
+  * an `#if __DOCUMENTATION__` block holding the DriverKit class body -- never
+    compiled, because the kernel declares these classes itself in IOKit/*.h;
+  * two macros the kernel pulls in through
+    OSDeclareDefaultStructorsWithDispatch(X) -> _OS_ADD_METHODS_dispatch(X),
+    which expands `X_Methods` and `X_KernelMethods` into the kernel's own
+    `class X` (see libkern/libkern/c++/OSMetaClass.h).
+
+    X_Methods        public: the DriverKit-facing calls, each with an extra
+                     `OSDispatchMethod supermethod = NULL` trailing parameter
+    X_KernelMethods  protected: the `X_<Name>_Args`-shaped `*_Impl` declarations
+                     that iokit/Kernel/IOUserServer.cpp defines
+
+This script reproduces both, plus the `X_<Name>_Args` macros. Two deliberate
+simplifications, both safe:
+
+  * X_KernelMethods declares a *superset* of the `*_Impl` methods -- Apple
+    splits them across X_ImplMethods and X_KernelMethods by the LOCAL
+    annotation, and only the latter reaches the kernel. An extra declaration
+    that nothing defines is harmless.
+  * methods marked `override` are left out of X_Methods (they are Apple's
+    X_VirtualMethods, which the kernel does not expand); they still get
+    `*_Impl` declarations in X_KernelMethods.
+
+Methods the kernel calls whose forwarder would have come from the generated
+.iig.cpp are spelled out in patches/xnu/iig-method-forwarders.patch.
+"""
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+ANNOTATION = re.compile(
+    r'\b(?:IIG_[A-Z_]+(?:\([^)]*\))?|KERNEL|LOCALONLY|LOCAL|NATIVE|REMOTE|'
+    r'LOCALHOST|INVOKEREPLY|REPLY|PORTMAKESEND|PORTCOPYSEND)\b')
+# Decorations that sit inside a declaration (on the return type or on a
+# parameter) and would otherwise be read as part of the C++ signature.
+DECORATION = re.compile(
+    r'\b(?:TARGET|SOURCE|RETURNS_RETAINED|DRIVERKIT_[A-Z_]+)\b|'
+    # an uppercase IIG annotation macro with an argument list:
+    # QUEUENAME(...), TYPE(IOUserClient::AsyncCompletion), ...
+    # Parens are required: without them the leading capitals of a
+    # CamelCase type such as IOUserClientScalarArray would be eaten.
+    r'\b[A-Z][A-Z0-9_]{2,}\s*\([^)]*\)')
+ACCESS = re.compile(r'\b(?:public|private|protected)\s*:')
+def _is_reply(annots):
+    """A REPLY/INVOKEREPLY method is invoked with the RPC first."""
+    return re.search(r'\b(?:REPLY|INVOKEREPLY)\b', annots) is not None
+
+
+LIFECYCLE = {'init', 'free', 'retain', 'release', 'getMetaClass',
+             'isEqualTo', 'taggedRetain', 'taggedRelease', 'initOSObject'}
+
+
+def strip_not_iig(lines):
+    """Remove #if !__IIG blocks, keeping an #else branch if present."""
+    out = []
+    i = 0
+    while i < len(lines):
+        if re.match(r'\s*#\s*if\s+!__IIG\s*$', lines[i]):
+            depth = 1
+            j = i + 1
+            else_at = None
+            while j < len(lines) and depth:
+                if re.match(r'\s*#\s*if\b', lines[j]):
+                    depth += 1
+                elif re.match(r'\s*#\s*endif\b', lines[j]):
+                    depth -= 1
+                elif depth == 1 and re.match(r'\s*#\s*else\b', lines[j]):
+                    else_at = j
+                j += 1
+            if else_at is not None:
+                out.extend(strip_not_iig(lines[else_at + 1:j - 1]))
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def is_class_start(line):
+    return bool(re.match(r'\s*class\b', line)) and not line.rstrip().endswith(';')
+
+
+def split_class_blocks(lines):
+    """Return (outside, [(class_name, [lines])]) for every class definition."""
+    outside = []
+    blocks = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if not is_class_start(lines[i]):
+            outside.append(lines[i])
+            i += 1
+            continue
+        header = lines[i]
+        # the IIG annotations (KERNEL, LOCAL, ...) are still on the line here,
+        # so strip them before deciding which class this block belongs to
+        clean = ANNOTATION.sub('', header)
+        m = re.match(r'\s*class\s+(?:EXTENDS\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*)?'
+                     r'([A-Za-z_][A-Za-z0-9_]*)', clean)
+        name = (m.group(1) or m.group(2)) if m else None
+        block = []
+        depth = 0
+        started = False
+        while i < n:
+            block.append(lines[i])
+            depth += lines[i].count('{') - lines[i].count('}')
+            if '{' in lines[i]:
+                started = True
+            i += 1
+            if started and depth <= 0:
+                break
+        blocks.append((name, block, re.search(r'\bNATIVE\b', header) is not None))
+    return outside, blocks
+
+
+DECL = re.compile(
+    r'(?:^|\n)[ \t]*'
+    r'((?:static[ \t]+|virtual[ \t]+)*[A-Za-z_][A-Za-z0-9_:<>,\s\*&]*?)'
+    r'[ \t]*\n?[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*'
+    r'\(((?:[^()]|\([^()]*\))*)\)[ \t]*((?:[^;()]|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))*?)[ \t]*(const)?[ \t]*;',
+    re.S)
+
+
+def parse_methods(block_lines):
+    """Extract (ret, name, params, annotations) from a class body."""
+    text = ''.join(block_lines)
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+    text = re.sub(r'//[^\n]*', '', text)
+    methods = []
+    for m in DECL.finditer(text):
+        ret = ACCESS.sub(' ', m.group(1))
+        ret = re.sub(r'\bvirtual\b', ' ', ret)
+        ret = ANNOTATION.sub('', DECORATION.sub(' ', ret))
+        ret = re.sub(r'\s+', ' ', ret).strip()
+        name = m.group(2)
+        params = ANNOTATION.sub('', DECORATION.sub(' ', m.group(3)))
+        params = re.sub(r'\s+', ' ', params).strip()
+        if params == 'void':
+            params = ''
+        # keep the raw parameters in the annotation text: TYPE(...) on a
+        # parameter is stripped from the signature below, but the method it
+        # names is invoked with the RPC first
+        rawparams = m.group(3)
+        annots = m.group(4)
+        if not ret or ret.endswith('='):      # stray default-argument catch
+            continue
+        if name in ('if', 'for', 'while', 'switch', 'return'):
+            continue
+        if not re.search(r'[a-z_]', ret) or DECORATION.match(name):
+            continue
+        methods.append((ret, name, params, annots + ' ' + rawparams,
+                        ' const' if re.search(r'\bconst\b', annots) else ''))
+    return methods
+
+
+def macro_lines(name, body):
+    """Emit a '#define name \\' continuation macro, one source line each."""
+    out = [f'#define {name} \\\n']
+    for line in body:
+        out.append(line + '\\\n')
+    return out
+
+
+
+def read_impl_definitions(root):
+    """Map (class, name) -> parameter list, from iokit/Kernel/IOUserServer.cpp.
+
+    Apple's iig derives the *_Impl declarations from the .iig, but a few
+    definitions in IOUserServer.cpp spell the parameters differently (array
+    parameters, a different const placement). The definition is what has to
+    compile, so prefer its signature when it is available.
+    """
+    import re as _re
+    found = {}
+    # a method can be defined in IOUserServer.cpp or in one of the shared
+    # implementation headers; anything defined here must not get a forwarder
+    sources = []
+    for folder, pattern in (('Kernel', '*.cpp'), ('Kernel', '*.h'),
+                            ('System', '*.h'), ('System', '*.cpp')):
+        sources.extend((Path(root) / 'iokit' / folder).glob(pattern))
+    text = '\n'.join(p.read_text() for p in sources if p.is_file())
+    for m in _re.finditer(
+            r'\n([A-Za-z_][A-Za-z0-9_:<>,\s\*&]*?)\n([A-Za-z_][A-Za-z0-9_]*)::'
+            r'([A-Za-z0-9_]+)(?:_Impl)?\(\s*\n?((?:[^()]|\([^()]*\))*)\)',
+            text):
+        name = m.group(3)
+        is_impl = name.endswith('_Impl')
+        if is_impl:
+            name = name[:-len('_Impl')]
+        ret = _re.sub(r'\s+', ' ', m.group(1)).strip()
+        found[(m.group(2), name, is_impl)] = (
+            _re.sub(r'\s+', ' ', m.group(4)).strip(), ret)
+    return found
+
+
+def emit_class_macros(name, methods, base=None, lookup_annots=None,
+                      impl_defs=None, method_defs=None):
+    """X_Methods, X_KernelMethods and the X_<Name>_Args macros.
+
+    An IIG method name can be overloaded (CreateNameMatchingDictionary has a
+    char* and an OSString* form). A macro can only carry one signature, so keep
+    the first and let a mismatched *_Impl definition surface as a compile error
+    rather than emitting a duplicate #define.
+    """
+    out = []
+    # An IIG method name can be overloaded (CanEnqueueData has a one- and a
+    # two-argument form). A macro can only carry one signature, so keep the
+    # widest: call sites pass the full argument list.
+    best = {}
+    for entry in methods:
+        # note: not `name` -- that is the class name parameter
+        method = entry[1]
+        if method not in best or entry[2].count(',') > best[method][2].count(','):
+            best[method] = entry
+    seen = set()
+    unique = []
+    for entry in methods:
+        if entry[1] in seen or best[entry[1]] is not entry:
+            continue
+        seen.add(entry[1])
+        unique.append(entry)
+
+    for ret, method, params, annots, qual in unique:
+        parts = [p.strip() for p in params.split(',') if p.strip()]
+        # An INVOKEREPLY method is invoked over RPC and its _Impl receives
+        # the call first; Apple's generated _Args carries `const IORPC rpc`.
+        if _is_reply(annots) or (lookup_annots and _is_reply(lookup_annots(method))):
+            parts = ['const IORPC rpc'] + parts
+        body = [f'        {p}' + (',' if i < len(parts) - 1 else '')
+                for i, p in enumerate(parts)]
+        out.extend(macro_lines(f'{name}_{method}_Args', body if body else ['']))
+        out.append('\n')
+
+    preamble = [
+        'public:',
+        '',
+        '    virtual kern_return_t',
+        '    Dispatch(const IORPC rpc) APPLE_KEXT_OVERRIDE;',
+        '',
+        '    static kern_return_t',
+        f'    _Dispatch({name} * self, const IORPC rpc);',
+    ]
+    entries = []
+    for ret, method, params, annots, qual in methods:
+        # init/free/retain/release are declared by OSMetaClass.h itself.
+        if method in LIFECYCLE:
+            continue
+        # iokit/Kernel/IOUserServer.cpp defines these out of line with the
+        # plain .iig parameter list and no trailing dispatch argument, so
+        # the declaration must match that shape exactly. The RPC forwarders
+        # that would carry `OSDispatchMethod supermethod` live in the
+        # generated .iig.cpp, which the kernel build does not compile.
+        args = [a.strip() for a in params.split(',') if a.strip()]
+        if _is_reply(annots) or (lookup_annots and _is_reply(lookup_annots(method))):
+            args = ['const IORPC rpc'] + args
+        # a method the kernel defines out of line keeps the plain .iig shape;
+        # one reached through the generated forwarder takes the dispatch
+        # supermethod last -- that is the symbol the prelink binder matches
+        if 'static' not in ret and (method_defs or {}).get((name, method, False)) is None:
+            args = args + ['OSDispatchMethod supermethod = NULL']
+        declared_ret = ('kern_return_t' if _is_reply(annots) or
+                       (lookup_annots and _is_reply(lookup_annots(method)))
+                       else ret)
+        block = ['', f'    {declared_ret}', f'    {method}(']
+        for i, a in enumerate(args):
+            block.append(f'        {a}' + (',' if i < len(args) - 1 else ''))
+        block.append(f'    ){qual if "static" not in ret else ""};')
+        entries.extend(block)
+    for ret, method, params, annots, qual in methods:
+        if 'TYPE(' not in annots:
+            continue
+        entries.extend(['', '    kern_return_t',
+                        f'    CreateAction{method}(',
+                        '        size_t referenceSize,',
+                        '        OSAction ** action);'])
+    out.extend(macro_lines(f'{name}_Methods', preamble + entries))
+    out.append('\n')
+
+    impls = ['', 'protected:', '    /* _Impl methods */']
+    invokes = []
+    for ret, method, params, annots, qual in unique:
+        if method in LIFECYCLE:
+            continue
+        # macro_lines supplies the continuation backslashes
+        invokes.extend(['',
+            f'    typedef kern_return_t (*{method}_Handler)('
+            f'OSMetaClassBase *, {name}_{method}_Args);'
+            if any(a.strip() for a in params.split(','))
+            else f'    typedef kern_return_t (*{method}_Handler)('
+                 f'OSMetaClassBase *);',
+            '    static kern_return_t',
+            f'    {method}_Invoke(const IORPC rpc,',
+            '        OSMetaClassBase * target,',
+            f'        {method}_Handler func);'])
+    for ret, method, params, annots, qual in unique:
+        known_entry = (impl_defs or {}).get((name, method, True))
+        known = known_entry[0] if known_entry else None
+        if known is not None:
+            impls.extend(['', f'    {ret}',
+                         f'    {method}_Impl({known});'])
+        else:
+            impls.extend(['', f'    {ret}',
+                         f'    {method}_Impl({name}_{method}_Args);'])
+    out.extend(macro_lines(f'{name}_KernelMethods', impls + invokes))
+    out.append('\n')
+
+    virtuals = ['', 'public:']
+    for ret, method, params, annots, qual in unique:
+        if method not in LIFECYCLE:
+            continue
+        suffix = ' APPLE_KEXT_OVERRIDE' if 'override' in annots else ''
+        parts_ = [a.strip() for a in params.split(',') if a.strip()]
+        # `virtual static` is ill-formed; a factory stays static
+        prefix = '' if 'static' in ret else 'virtual '
+        block = ['', f'    {prefix}{ret}', f'    {method}(']
+        for i, a in enumerate(parts_):
+            block.append(f'        {a}' + (',' if i < len(parts_) - 1 else ''))
+        block.append(f'    ){suffix};')
+        virtuals.extend(block)
+    out.extend(macro_lines(f'{name}_VirtualMethods', virtuals))
+    out.append('\n')
+    return out
+
+
+def emit_native_class(name, base):
+    """The class shell iig emits for a NATIVE class."""
+    return [
+        f'class {name}Interface : public OSInterface\n',
+        '{\n', 'public:\n', '};\n', '\n',
+        f'struct {name}_IVars;\n', f'struct {name}_LocalIVars;\n', '\n',
+        f'class {name} : public {base}, public {name}Interface\n', '{\n',
+        f'    OSDeclareDefaultStructorsWithDispatch({name});\n', '\n',
+        'public:\n', '    union\n', '    {\n',
+        f'        {name}_IVars * ivars;\n', f'        {name}_LocalIVars * lvars;\n',
+        '    };\n', '\n', f'    using super = {base};\n', '\n',
+        f'    {name}_VirtualMethods\n', '};\n', '\n',
+    ]
+
+
+
+def name_of_file(header):
+    return Path(header).stem
+
+
+
+def _strip_top_const(t):
+    return re.sub(r'\s+const$', '', t.strip()).strip()
+
+
+def _param_types(params):
+    """The declared type of each parameter (everything but the name)."""
+    types = []
+    for part in params.split(','):
+        part = part.strip()
+        if not part or part == 'void':
+            continue
+        ident = re.findall(r'[A-Za-z_][A-Za-z0-9_]*', part)
+        name = ident[-1] if ident else ''
+        types.append(part[:part.rfind(name)].strip() if name else part)
+    return types
+
+def _arg_names(params):
+    """The parameter names of a comma-separated C++ parameter list."""
+    names = []
+    for part in params.split(','):
+        part = part.strip()
+        if not part or part == 'void':
+            continue
+        ident = re.findall(r'[A-Za-z_][A-Za-z0-9_]*', part)
+        names.append(ident[-1] if ident else 'arg%d' % len(names))
+    return names
+
+
+def emit_forwarders(definition, order, merged, impl_defs, method_defs,
+                    lookup_annots=None, base_of=None, native=None):
+    """The .iig.cpp: DriverKit-facing forwarders and the RPC Dispatch stubs.
+
+    Apple's iig writes the forwarders into the generated implementation, which
+    iokit/conf/files lists among the kernel sources. Each one either calls the
+    *_Impl that iokit/Kernel/IOUserServer.cpp defines, or is a stub when the
+    method has no kernel-side implementation.
+    """
+    src = Path(definition).parent.parent  # .../iokit
+    stem = Path(definition).stem
+    # the kernel's own header is what defines the class; the generated
+    # DriverKit header only augments it
+    kernel_hdr = Path(definition).parent.parent / 'IOKit' / f'{stem}.h'
+    primary = (f'<IOKit/{stem}.h>' if kernel_hdr.is_file()
+               else f'<DriverKit/{stem}.h>')
+    out = [f'/* generated from {Path(definition).name} by the Linux iig shim */\n',
+           f'#include <DriverKit/{stem}.h>\n',
+           f'#include {primary}\n',
+           '#include <IOKit/IORPC.h>\n'
+           '#include <IOKit/IOReturn.h>\n\n']
+    for cls in order:
+        out.extend(_class_forwarders(cls, merged[cls], impl_defs, method_defs,
+                                  lookup_annots(cls) if lookup_annots else None,
+                                  (base_of or {}).get(cls, 'OSObject'),
+                                  (native or {}).get(cls, False)))
+    return ''.join(out)
+
+
+def _class_forwarders(cls, methods, impl_defs, method_defs, lookup_annots=None,
+                      base='OSObject', is_native=False):
+    out = []
+    seen = set()
+    for ret, method, params, annots, qual in methods:
+        if method in LIFECYCLE or method in seen:
+            continue
+        seen.add(method)
+        if (method_defs or {}).get((cls, method, False)) is not None:
+            continue
+        # the definition has to match the X_Methods declaration, so shape its
+        # parameter list exactly the same way, RPC first when the .iig says so
+        reply = (_is_reply(annots) or
+                 (lookup_annots and _is_reply(lookup_annots(method))))
+        decl_list = [a.strip() for a in params.split(',') if a.strip()]
+        if reply:
+            decl_list = ['const IORPC rpc'] + decl_list
+        takes_super = ('static' not in ret and
+                       (method_defs or {}).get((cls, method, False)) is None)
+        if takes_super:
+            decl_list = decl_list + ['OSDispatchMethod supermethod']
+        decl_params = ', '.join(decl_list)
+        names = _arg_names(decl_params)
+        known_entry = (impl_defs or {}).get((cls, method, True))
+        known = known_entry[0] if known_entry else None
+        known_ret = known_entry[1] if known_entry else ''
+        if known is None:
+            call_args = ''
+        else:
+            def_types = _param_types(known)
+            if takes_super and names and names[-1] == 'supermethod':
+                names = names[:-1]
+            if len(def_types) == len(names) - 1 and names and names[0] == 'rpc':
+                # *_Impl is not given the dispatch RPC the entry point takes
+                names = names[1:]
+            if len(def_types) == len(names):
+                args = []
+                for t, n in zip(def_types, names):
+                    # const_cast is only legal on pointers and references
+                    args.append(f'const_cast<{_strip_top_const(t)}>({n})'
+                                if ('*' in t or '&' in t) else n)
+                call_args = ', '.join(args)
+            else:
+                call_args = ', '.join(names)
+        # X_Methods reports kIOReturn for a REPLY method even when the .iig
+        # gives it another return type
+        decl_ret = 'kern_return_t' if reply else ret
+        def_ret = re.sub(r'\s+', ' ',
+                         re.sub(r'\b(?:static|virtual)\b', '', decl_ret)).strip()
+        out.append(f'{def_ret}\n{cls}::{method}({decl_params})\n{{\n')
+        if known is None:
+            if def_ret != 'void':
+                out.append('\treturn {};\n')
+        elif def_ret == 'void':
+            out.append(f'\t{method}_Impl({call_args});\n')
+        elif known_ret.endswith('void'):
+            out.append(f'\t{method}_Impl({call_args});\n\treturn {{}};\n')
+        else:
+            out.append(f'\treturn {method}_Impl({call_args});\n')
+        out.append('}\n\n')
+    # a class iig fully defines carries its own metaclass instance
+    if is_native and cls != 'OSMetaClassBase':
+        out.append(f'OSDefineMetaClassAndStructors({cls}, {base})\n\n')
+    if cls != 'OSMetaClassBase':
+        out.append(f'kern_return_t\n{cls}::Dispatch(const IORPC rpc)\n{{\n'
+                   '\t(void)rpc;\n\treturn kIOReturnUnsupported;\n}\n\n')
+        out.append(f'kern_return_t\n{cls}::_Dispatch({cls} * self, const IORPC rpc)\n{{\n'
+                   '\treturn self->Dispatch(rpc);\n}\n\n')
+        out.append(f'kern_return_t\n{cls}::MetaClass::Dispatch(const IORPC rpc)\n{{\n'
+                   '\t(void)rpc;\n\treturn kIOReturnUnsupported;\n}\n\n')
+        # The RPC invoke glue iig generates alongside the forwarders. The
+        # signature is what the prelink binder matches; the argument decoding
+        # is not reproduced, so the stub reports unsupported.
+        seen_invoke = set()
+        for ret, method, params, annots, qual in methods:
+            if method in LIFECYCLE or method in seen_invoke:
+                continue
+            seen_invoke.add(method)
+            out.append(f'kern_return_t\n{cls}::{method}_Invoke(const IORPC rpc,\n'
+                       f'    OSMetaClassBase * target, {method}_Handler func)\n{{\n'
+                       '\t(void)rpc;\n\t(void)target;\n\t(void)func;\n'
+                       '\treturn kIOReturnUnsupported;\n}\n\n')
+    return ''.join(out)
+
+
+def main(argv):
+    definition = header = implementation = None
+    i = 1
+    while i < len(argv):
+        if argv[i] == '--def':
+            definition = argv[i + 1]; i += 2
+        elif argv[i] == '--header':
+            header = argv[i + 1]; i += 2
+        elif argv[i] == '--impl':
+            implementation = argv[i + 1]; i += 2
+        elif argv[i] == '--':
+            break
+        else:
+            i += 1
+    if not definition or not header:
+        sys.exit('iig: --def and --header are required')
+
+    kernel_dir = os.environ.get('UNIXNU_DRIVERKIT_KERNEL_DIR')
+    if kernel_dir:
+        known = Path(kernel_dir) / Path(header).name
+        if known.is_file():
+            Path(header).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(known, header)
+            if implementation:
+                Path(implementation).parent.mkdir(parents=True, exist_ok=True)
+                impl = Path(kernel_dir) / (Path(header).stem + '.iig.cpp')
+                if impl.is_file():
+                    shutil.copyfile(impl, implementation)
+                else:
+                    Path(implementation).write_text(
+                        '/* DriverKit invocation stub: not used by the kernel build */\n')
+            return 0
+
+    raw = Path(definition).read_text().splitlines(keepends=True)
+    # Apple's output keeps the `#if !__IIG / #include <IOKit/Foo.h> / #endif`
+    # block at the top: that is how the generated header pulls in the kernel's
+    # own class definition.
+    result = []
+    for line in raw:
+        if re.match(r'\s*#', line):
+            result.append(re.sub(r'(<DriverKit/[^>]+)\.iig>', r'\1.h>', line))
+        else:
+            result.append(line)
+
+    srcroot = Path(definition).resolve()
+    while srcroot != srcroot.parent and not (srcroot / 'iokit' / 'Kernel').is_dir():
+        srcroot = srcroot.parent
+    all_defs = read_impl_definitions(srcroot)
+    method_defs = {k: v for k, v in all_defs.items() if not k[2]}
+    impl_defs = {k: v for k, v in all_defs.items() if k[2]}
+
+    outside, blocks = split_class_blocks(result)
+    _, parse_blocks = split_class_blocks(strip_not_iig(result))
+    merged = {}
+    native = {}
+    base_of = {}
+    order = []
+    for (name, block, is_native), (_, parse_block, _) in zip(blocks, parse_blocks):
+        if name is None:
+            continue
+        if name not in merged:
+            merged[name] = []
+            order.append(name)
+        native[name] = is_native or native.get(name, False)
+        m2 = re.search(r':\s*public\s+([A-Za-z_][A-Za-z0-9_]*)',
+                       ANNOTATION.sub('', block[0]))
+        if m2 and name not in base_of:
+            base_of[name] = m2.group(1)
+        merged[name].extend(parse_methods(parse_block[1:]))
+
+    text = ''.join(ANNOTATION.sub('', l) if not l.lstrip().startswith('#')
+                   else l for l in outside)
+    parts = ['#if __DOCUMENTATION__\n']
+    for _, block, _ in blocks:
+        parts.extend(ANNOTATION.sub('', l) for l in block)
+    parts.append('#endif /* !__DOCUMENTATION__ */\n\n')
+    parts.append('/* generated dispatch glue; see scripts/linux/iig */\n')
+    caches = {}
+
+    def make_lookup(name):
+        base = base_of.get(name)
+        cache = caches.setdefault(name, {})
+
+        def lookup(method, _base=base, _cache=cache):
+            if method in _cache:
+                return _cache[method]
+            _cache[method] = ''
+            if not _base:
+                return ''
+            base_iig = Path(definition).parent / (str(_base) + '.iig')
+            if not base_iig.is_file():
+                return ''
+            _o, _bs = split_class_blocks(base_iig.read_text().splitlines(keepends=True))
+            for _n, _b, _nat in _bs:
+                for _r, _m, _p, _a, _q in parse_methods(_b[1:]):
+                    if _m == method:
+                        _cache[method] = _a
+                        return _a
+            return ''
+        return lookup
+
+    for name in order:
+        base = base_of.get(name)
+        parts.extend(emit_class_macros(name, merged[name], base,
+                                      make_lookup(name), impl_defs,
+                                  method_defs))
+        if native.get(name):
+            parts.extend(emit_native_class(name, base_of.get(name, 'OSObject')))
+        parts.append('\n')
+    generated = ''.join(parts)
+    # The .iig closes its own include guard at the end of the file; Apple emits
+    # the macros before that #endif so a second include is a no-op.
+    cut = text.rfind('\n#endif')
+    if cut != -1:
+        text = text[:cut + 1] + generated + text[cut + 1:]
+    else:
+        text += generated
+
+    if '__IIG' not in text.split('\n', 1)[0]:
+        text = ('/* generated from ' + Path(definition).name +
+                ' by the Linux iig shim */\n' + text)
+    Path(header).parent.mkdir(parents=True, exist_ok=True)
+    Path(header).write_text(text)
+    if implementation:
+        Path(implementation).parent.mkdir(parents=True, exist_ok=True)
+        Path(implementation).write_text(
+            emit_forwarders(definition, order, merged,
+                            impl_defs, method_defs, make_lookup, base_of,
+                            native))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))
