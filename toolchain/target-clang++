@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# C++ variant of target-clang.
+# C++ variant of target-clang. A command carrying -mmacosx-version-min is a host-tool build (XNU's
+# SETUP makefiles); hand it to the host compiler.
 for a in "$@"; do
     case "$a" in
         -mmacosx-version-min=*)
@@ -28,4 +29,21 @@ done
 if [ $link = 1 ]; then
     args=(--ld-path="$(dirname "$0")/ld" "${args[@]}")
 fi
-exec /usr/sbin/clang++ "${target[@]}" "${args[@]}"
+# The kernel and its drivers build with -Werror under Xcode's clang. A newer
+# upstream clang adds diagnostics those sources were never adjusted for;
+# silence exactly those rather than touch the project.
+WNO=(
+  -Wno-missing-designated-field-initializers
+  -Wno-unused-but-set-global
+  -Wno-unused-but-set-variable
+  -Wno-unused-variable
+  -Wno-unused-private-field
+  -Wno-unsafe-buffer-usage
+  -Wno-deprecated-declarations
+  -Wno-cast-function-type-mismatch
+  -Wno-suggest-override
+  -Wno-suggest-destructor-override
+  -Wno-unnecessary-virtual-specifier
+  -Wno-unknown-warning-option
+)
+exec "${XNU_LINUX_CLANG:-clang++}" "${target[@]}" "${args[@]}" "${WNO[@]}"

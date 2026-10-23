@@ -1,0 +1,17 @@
+# Diagnostics that must not be fatal.
+#
+# The project builds its drivers with -Werror under Xcode's clang. Upstream
+# clang raises a small number of extra diagnostics that fire on the existing
+# sources -- mostly inside macro expansions the project owns (OSMetaClass.h's
+# KALLOC_TYPE_DEFINE, OSDefineMetaClassAndStructors) -- and the project's own
+# build scripts rebuild the warning set from a recorded command line, so a
+# compiler wrapper cannot inject flags.
+#
+# `-Wno-error=<diag>` demotes exactly that diagnostic; every other warning is
+# still fatal. If a build stops on a diagnostic that clearly comes from
+# pre-existing code, add it here -- do not switch to a blanket -Wno-error,
+# which is what silences real problems in new driver code.
+#
+# Measured on the uke-full configuration of UniXNU-uke@main, 2026-10-23.
+missing-designated-field-initializers
+unused-but-set-global

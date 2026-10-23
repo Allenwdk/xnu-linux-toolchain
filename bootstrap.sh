@@ -126,6 +126,7 @@ clone cctools-port https://github.com/tpoechtrager/cctools-port.git
 
 log "installing shims"
 cp -f "$REPO"/toolchain/* "$PREFIX/bin/"
+cp -f "$REPO/env.sh" "$PREFIX/env.sh"
 chmod +x "$PREFIX/bin/"*
 ln -sf tcsh "$PREFIX/bin/csh" 2>/dev/null || true
 

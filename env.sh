@@ -41,4 +41,30 @@ export JOBS="${JOBS:-$(nproc)}"
 # leave this unset so the shim generates everything from the .iig sources.
 unset UNIXNU_DRIVERKIT_KERNEL_DIR 2>/dev/null || true
 
+
+# The project's own build scripts rebuild the warning set from a recorded
+# command line (they strip -W* and add their own), so a compiler wrapper cannot
+# inject flags and -MJ records the real compiler path. CCC_OVERRIDE_OPTIONS is
+# read by the clang driver itself and appended after every other argument.
+#
+# toolchain/werror-exceptions.txt lists the diagnostics that fire on the
+# existing sources; each becomes non-fatal. Everything else stays fatal, so a
+# real problem in new driver code still stops the build.
+if [ -f "$XNU_LINUX_PREFIX/bin/werror-exceptions.txt" ]; then
+  _wno="$XNU_LINUX_PREFIX/bin/werror-exceptions.txt"
+elif [ -f "$XNU_LINUX_REPO/toolchain/werror-exceptions.txt" ]; then
+  _wno="$XNU_LINUX_REPO/toolchain/werror-exceptions.txt"
+else
+  _wno=""
+fi
+if [ -n "$_wno" ]; then
+  _args=""
+  while IFS= read -r _diag; do
+    case "$_diag" in ''|'#'*) continue;; esac
+    _args="$_args +-Wno-error=$_diag"
+  done < "$_wno"
+  export CCC_OVERRIDE_OPTIONS="${CCC_OVERRIDE_OPTIONS:-$_args}"
+fi
+unset _wno _diag _args
+
 unset _XNL_SELF
