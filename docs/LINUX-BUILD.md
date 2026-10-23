@@ -412,7 +412,7 @@ macOS 上是硬约束；Linux runner 还能跑更大并行，冷构建时间大�
 
 ### 已落地
 
-**工具链**（复用 `/home/allenwdk/xnu-linux-research/toolchain`）：
+**工具链**（复用先前手搓的一套 shim；现在由 `bootstrap.sh` 造）：
 `mig`/`migcom`（bootstrap_cmds）、`iig`（Python 重实现，见 `UniXNU/scripts/linux/iig`）、
 cctools 的 `ld`/`strip`/`libtool`/`nmedit`/`codesign_allocate`、LLVM 的
 `nm`/`otool`/`lipo`/`dsymutil`，加上 `plutil`/`xcrun`/`codesign`/`ditto`/
